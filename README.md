@@ -2,7 +2,6 @@
 
 TripGraph is an intelligent, graph-powered trip planning system that creates optimized, time-aware travel itineraries. By leveraging advanced graph algorithms and AI, TripGraph generates feasible daily schedules that respect real-world constraints like opening hours, travel times, walking limits, and user preferences.
 
-[![Built with Lovable](https://img.shields.io/badge/Built%20with-Lovable-ff69b4)](https://lovable.dev)
 [![React](https://img.shields.io/badge/React-18.3.1-61DAFB?logo=react)](https://reactjs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.5-3178C6?logo=typescript)](https://www.typescriptlang.org/)
 [![Tailwind CSS](https://img.shields.io/badge/Tailwind-3.4-38B2AC?logo=tailwind-css)](https://tailwindcss.com/)
