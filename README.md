@@ -294,11 +294,6 @@ Contributions are welcome! Here's how you can help:
 - Test on multiple browsers and devices
 - Update documentation for new features
 
----
-
-## 📄 License
-
-This project is built with [Lovable](https://lovable.dev/projects/d86bc005-cdf1-4a79-b410-404cf4215e75).
 
 ---
 
