@@ -306,3 +306,6 @@ Contributions are welcome! Here's how you can help:
 ---
 
 **Made with for travelers who deserve better planning tools**
+
+**Jihad Mobarak: 202300413 - Ali Assaad: 202302601**
+
