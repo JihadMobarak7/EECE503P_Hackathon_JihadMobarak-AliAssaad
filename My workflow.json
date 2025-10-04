@@ -1,0 +1,737 @@
+{
+  "name": "My workflow",
+  "nodes": [
+    {
+      "parameters": {
+        "jsCode": "let raw =\n  items[0]?.json?.text ??\n  items[0]?.json?.message?.content ??\n  items[0]?.json?.content ?? '';\n\nif (typeof raw !== 'string') raw = JSON.stringify(raw);\n\n// ```json ... ``` fenced?\nconst fence = raw.match(/```(?:json)?\\s*([\\s\\S]+?)```/i);\nif (fence) raw = fence[1];\n\n// first {...} block\nconst brace = raw.match(/\\{[\\s\\S]+\\}/);\nif (brace) raw = brace[0];\n\nlet parsed = {};\ntry { parsed = JSON.parse(raw); } catch (e) { parsed = {}; }\n\n// always keep missing an array so the IF node is happy\nif (!Array.isArray(parsed.missing)) parsed.missing = [];\n\nreturn [{ json: { trip: parsed, chat: items[0].json.chat || [] } }];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        928,
+        0
+      ],
+      "id": "bf1cf17f-aa68-480c-9c27-05151656f2a4",
+      "name": "Parse Extracted JSON"
+    },
+    {
+      "parameters": {
+        "jsCode": "const b = $json.body || {};\n\n// accept several possible keys just in case\nconst text =\n  (b.user_text ?? b.text ?? b.message ?? \"\").toString().trim();\n\n// state coming from Lovable (or start fresh)\nconst inState = b.state && typeof b.state === \"object\"\n  ? b.state\n  : { trip: {}, chat: [] };\n\nreturn [{\n  json: {\n    session_id: b.session_id || inState.session_id || null,\n    text,\n    state: inState,\n    trip: inState.trip || {},\n    chat: Array.isArray(inState.chat) ? inState.chat : []\n  }\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        160,
+        0
+      ],
+      "id": "bbca439e-ee5e-470b-bc59-1fb8079e22c3",
+      "name": "Normalize Input"
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "plan",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        0
+      ],
+      "id": "a581374c-7b1c-4543-8cdf-fdd07b973932",
+      "name": "entry",
+      "webhookId": "7c7e670e-a67f-440d-962b-387ec0a33c89"
+    },
+    {
+      "parameters": {
+        "jsCode": "const trip = items[0].json.trip || {};\nconst missing = Array.isArray(trip.missing) ? trip.missing : [];\nconst chat = items[0].json.chat || [];\nreturn [{ json: { trip, missing, needs_more_info: missing.length > 0, chat } }];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        0
+      ],
+      "id": "f2f3bb62-47af-44f3-9204-300d96fcf3d3",
+      "name": "Check Completeness"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "a700413a-59de-46a1-91cf-f353d4713238",
+              "leftValue": "={{$json.missing.length}}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1408,
+        0
+      ],
+      "id": "5bc29a0a-cc92-47ee-be78-13fda9e56c0b",
+      "name": "Need more info?"
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-4o",
+          "mode": "list",
+          "cachedResultName": "GPT-4O"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "You are a STRICT data extractor. Only extract values explicitly provided in the input text or in the \"Known trip so far\" JSON if present.\nNever guess or infer defaults. If something is not stated, set it to null.\n\nReturn ONLY compact JSON with EXACTLY:\n{\n  \"destination\": string|null,\n  \"arrival_iso\": string|null,       // ISO 8601; if either date or time is missing, keep null\n  \"days\": number|null,\n  \"budget_total_eur\": number|null,\n  \"interests\": string[]|null,       // split on commas; trim; empty -> null\n  \"pace\": \"easy\"|\"medium\"|\"fast\"|null,\n  \"companions\": \"solo\"|\"friends\"|\"partner\"|\"family\"|\"group\"|null,\n  \"constraints\": {\n    \"max_walk_min\": number|null,\n    \"kid_friendly\": boolean|null,\n    \"wheelchair\": boolean|null,\n    \"avoid\": string[]|null\n  },\n  \"missing\": string[]               // keys whose values are null (e.g. [\"arrival_iso\",\"budget_total_eur\"])\n}\nDo not change previously known values unless the user explicitly overrides them.\nOutput raw JSON only — no code fences, no prose.\n",
+              "role": "system"
+            },
+            {
+              "content": "=Known trip so far: {{ JSON.stringify($json.state.trip || {}) }}\nUser says: {{ $json.text }}\n"
+            }
+          ]
+        },
+        "options": {
+          "maxTokens": 300,
+          "temperature": 0.2
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.8,
+      "position": [
+        512,
+        0
+      ],
+      "id": "196179ed-e31d-41d5-85d2-a824b79c5558",
+      "name": "Extract Trip JSON   ",
+      "credentials": {
+        "openAiApi": {
+          "id": "gRRG5FYoE9FqTXld",
+          "name": "OpenAi account 3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-4o",
+          "mode": "list",
+          "cachedResultName": "GPT-4O"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "You are a helpful travel concierge.\n\nYou will receive:\n- trip: a JSON object with fields we already know.\n- missing: an array of field names that are still missing.\n- chat: a short prior chat transcript (optional).\n\nRules:\n1) Ask concise, friendly questions ONLY for fields that appear in the `missing` array.\n2) Do NOT ask about any field that already exists in `trip`.\n3) If `missing` is empty, reply with exactly: DONE (uppercase), no punctuation.\n4) Keep it to one message. Prefer a short bulleted or numbered list.\n5) Use the same language as the user if obvious.\n",
+              "role": "system"
+            },
+            {
+              "content": "=trip: {{ JSON.stringify($json.trip || {}) }}\nmissing: {{ JSON.stringify($json.missing || []) }}\nchat: {{ JSON.stringify(($json.state && $json.state.chat) ? $json.state.chat : []) }}\n"
+            }
+          ]
+        },
+        "options": {
+          "maxTokens": 300,
+          "temperature": 0.4
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.8,
+      "position": [
+        1712,
+        -304
+      ],
+      "id": "fc488af3-9b84-4fd3-b858-900caa90d407",
+      "name": "Ask for info",
+      "credentials": {
+        "openAiApi": {
+          "id": "gRRG5FYoE9FqTXld",
+          "name": "OpenAi account 3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const llmText =\n  ($json.message && typeof $json.message.content === 'string'\n    ? $json.message.content\n    : $json.reply) || 'Can you share the missing details?';\n\n// keep/extend chat\nconst chat = Array.isArray($json.state?.chat) ? $json.state.chat.slice() : [];\nchat.push({ role: 'assistant', text: llmText });\n\n// keep the full state – DON’T replace it\nconst nextState = {\n  ...( $json.state || { trip: {}, chat: [] } ),\n  chat,\n};\n\n// Return exactly what Lovable expects\nreturn [{\n  json: {\n    reply: llmText,\n    state: nextState,   // Lovable must POST this back on the next turn\n    done: false,\n    html: ''\n  }\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2448,
+        -320
+      ],
+      "id": "060f673f-2e8f-4105-9b80-50e13f4a75a7",
+      "name": "Render Askback HTML"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{$json}}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        4672,
+        -32
+      ],
+      "id": "2004a5f5-6db9-42d8-9e30-544df6e937d3",
+      "name": "Respond to Webhook "
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        2208,
+        -304
+      ],
+      "id": "88d933e7-aee1-43eb-bd74-f1198c15d1ce",
+      "name": "Merge"
+    },
+    {
+      "parameters": {
+        "url": "=https://geocoding-api.open-meteo.com/v1/search",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "=name",
+              "value": "={{$json.trip?.destination || $json.destination}}"
+            },
+            {
+              "name": "count",
+              "value": "1"
+            },
+            {
+              "name": "language",
+              "value": "en"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1616,
+        96
+      ],
+      "id": "785cd5df-1c23-4e7e-9912-402b38405a24",
+      "name": "HTTP Request"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Keep any trip object we already have\nconst trip = $json.trip ?? {};\n\n// HTTP node's JSON response\nconst res = $json;\nconst hit = res.results && res.results[0];\n\nif (!hit) {\n  // No geocode hit -> mark destination as missing\n  return [{\n    json: {\n      ...$json,\n      trip,\n      geo: null,\n      missing: ['destination_not_found'],\n      info: 'Could not geocode destination.',\n    }\n  }];\n}\n\n// Build a compact geo payload\nconst geo = {\n  city: hit.name,\n  country: hit.country,\n  lat: hit.latitude,\n  lon: hit.longitude,\n  timezone: hit.timezone,\n};\n\n// Prefer the user’s destination text; otherwise use the geocoded city name\nconst updatedTrip = {\n  ...trip,\n  destination: trip.destination || geo.city,\n};\n\nreturn [{\n  json: {\n    ...$json,\n    trip: updatedTrip,\n    geo,\n    // Clear any previous \"destination_not_found\" if present\n    missing: ($json.missing || []).filter(m => m !== 'destination_not_found'),\n  }\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1824,
+        96
+      ],
+      "id": "83115ccc-a084-4b9b-a9e6-eece3179657b",
+      "name": "Attach geocode"
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-4o",
+          "mode": "list",
+          "cachedResultName": "GPT-4O"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "You are TripGraph, a travel planner. \nGiven a trip object, produce a realistic, walkable itinerary for the destination city only (no cross-country hops).\nTime span: 09:00–21:00 daily. \nHonor interests, pace (relaxed|moderate|fast), budget hints, companions.\n\nOUTPUT RULES (very important):\n- Respond with JSON ONLY. No backticks or extra text.\n- Shape must match:\n{\n  \"notes\": string,\n  \"days\": [\n    {\n      \"title\": string,\n      \"blocks\": [\n        {\n          \"place\": string,            // well-known, plausible\n          \"category\": string,         // e.g., historic, museum, viewpoint, food, beach, park, nightlife\n          \"start\": \"HH:MM\",           // 24h\n          \"end\": \"HH:MM\",\n          \"walk_min\": number,         // walking time from previous block\n          \"est_cost_eur\": number|null,\n          \"xid\": string               // unique id: \"llm-1\", \"llm-2\", ...\n        }\n      ]\n    }\n  ]\n}\n- Always include at least 3–5 blocks per day.\n- Use “xid” as a running counter (\"llm-1\", \"llm-2\", ...).\n- If budget is small, bias to free/cheap attractions and street food.\n- If pace=fast, reduce sit-down time and increase attractions; if relaxed, add longer meals/breaks.\n- If interests are provided, prioritize them (e.g., nightlife, beaches, architecture).\n- If companions includes \"kids\" or constraints mention wheelchair, accommodate access.\n",
+              "role": "system"
+            },
+            {
+              "content": "=Trip:\n{{ JSON.stringify($json.trip || {}, null, 2) }}\n\nGeo (optional):\n{{ JSON.stringify($json.geo || {}, null, 2) }}\n"
+            }
+          ]
+        },
+        "jsonOutput": true,
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.8,
+      "position": [
+        2224,
+        240
+      ],
+      "id": "228f9438-627c-42b9-8165-1b45445ec096",
+      "name": "Plan Itinerary",
+      "credentials": {
+        "openAiApi": {
+          "id": "gRRG5FYoE9FqTXld",
+          "name": "OpenAi account 3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const days = Array.isArray($json.days) ? $json.days : [];\nfunction esc(s){return String(s||'').replace(/[&<>\"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'}[m]));}\n\nlet html = `<style>\n body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;background:#fafafa;margin:0;padding:16px}\n .day{margin:14px 0;padding:12px;border:1px solid #eee;border-radius:10px;background:#fff}\n .title{font-weight:600;margin:0 0 8px}\n .block{margin-left:10px;padding:6px 10px;border-left:3px solid #eaeaea}\n .meta{opacity:.7;font-size:12px}\n</style><div class=\"title\">Itinerary</div>`;\n\ndays.forEach((d,i)=>{\n  html += `<div class=\"day\"><div class=\"title\">Day ${i+1}: ${esc(d.title||'')}</div>`;\n  (d.blocks||[]).forEach(b=>{\n    html += `<div class=\"block\"><div>${esc(b.place||'')}</div>\n      <div class=\"meta\">${esc(b.category||'')} • ${esc(b.start||'')}–${esc(b.end||'')}\n      • walk~${Number(b.walk_min||0)}m${b.est_cost_eur!=null?(' • €'+Number(b.est_cost_eur)) : ''}</div></div>`;\n  });\n  html += `</div>`;\n});\n\nreturn [{ json: { ...$json, plan_html: html } }];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2656,
+        240
+      ],
+      "id": "108d8b22-86c5-4a4b-976a-a206b593ad51",
+      "name": "Render Plan HTML"
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-4o",
+          "mode": "list",
+          "cachedResultName": "GPT-4O"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "You are a helpful travel guide. Given itinerary days (with blocks) and the Mermaid graph code,\nwrite 4–6 short bullet points that explain the high-level structure and trade-offs (pace, grouping, variety, walking / timing).\nEach bullet ≤ 20 words. Return valid HTML: <ul><li>...</li>...</ul>\n",
+              "role": "system"
+            },
+            {
+              "content": "=Days:\n{{ JSON.stringify($json.days || [], null, 2) }}\n\nMermaid:\n{{ $json.mermaid || '' }}\n"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.8,
+      "position": [
+        3408,
+        288
+      ],
+      "id": "e9f9267b-bcea-4613-aa60-05500955ccbb",
+      "name": "Graph explainer",
+      "credentials": {
+        "openAiApi": {
+          "id": "gRRG5FYoE9FqTXld",
+          "name": "OpenAi account 3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Read from both inputs\nconst in1 = (await $input.all(0))[0] || { json: {} };   // plan + explainer\nconst in2 = (await $input.all(1))[0] || { json: {} };   // mermaid urls/code\n\nfunction esc(s = '') {\n  return String(s).replace(/[&<>\"']/g, m => (\n    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' }[m]\n  ));\n}\n\n// From input 0\nconst plan_html = in1.json.html || '';\nconst why_text  = in1.json.message?.content || '';\n\n// From input 1\nconst urlSvg = in2.json.mermaid_url_svg || '';\nconst code   = in2.json.mermaid_code || '';\n\n// Build the graph tab markup using an <img> (no scripts needed)\nconst graph_html = urlSvg\n  ? `<img src=\"${urlSvg}\" alt=\"Trip graph\" style=\"max-width:100%;height:auto;display:block;margin:0 auto;\" />`\n  : '';\n\n// Optional download link\nconst download_html = urlSvg\n  ? `<p><a href=\"${urlSvg}\" download=\"trip-graph.svg\">Download graph (SVG)</a></p>`\n  : '';\n\nconst why_html = `<div class=\"prose\"><p>${esc(why_text)}</p></div>`;\n\nreturn [{\n  json: {\n    plan_html,\n    graph_html,          // your Graph tab should render this\n    why_html,\n\n    // extras\n    mermaid_url_svg: urlSvg,\n    mermaid_code: code,\n    download_html\n  }\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4256,
+        272
+      ],
+      "id": "87c07be6-a3d5-47a6-84bf-ef81d1ffa0cd",
+      "name": "Combine pages into tabs"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Load previous state carried by the UI (Lovable) and merge new bits\n\nconst prev = $json.state ?? { trip: {}, chat: [], done: false };\n\n// what this request added\nconst incomingTrip = $json.trip || {};\nconst incomingChat = Array.isArray($json.chat) ? $json.chat : [];\n\n// deep-merge constraints and shallow-merge everything else\nconst mergedTrip = {\n  ...prev.trip,\n  ...incomingTrip,\n  constraints: { ...(prev.trip?.constraints || {}), ...(incomingTrip.constraints || {}) }\n};\n\nconst mergedChat = (prev.chat || []).concat(incomingChat);\n\n// rebuild the state we’ll keep carrying between turns\nconst nextState = {\n  ...prev,\n  trip: mergedTrip,\n  chat: mergedChat,\n  done: false\n};\n\n// hand off to the rest of the flow\nreturn [{\n  json: {\n    ...$json,\n    trip: mergedTrip,\n    chat: mergedChat,\n    state: nextState\n  }\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        352,
+        0
+      ],
+      "id": "1c5cab7e-5440-45f9-a487-505068b51534",
+      "name": "Load & merge memory"
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-4o",
+          "mode": "list",
+          "cachedResultName": "GPT-4O"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "You are a formatter that converts trip data into a Mermaid flowchart. \nRules:\n- Output ONLY a single fenced code block starting with ```mermaid and ending with ``` .\n- Do not add any extra text before or after the code block.\n- Keep it compact, readable, and valid Mermaid syntax.\n\nFlowchart guidelines:\n- Use graph LR\n- One start node \"Trip\"\n- Branch into 3–6 key blocks based on the trip data: Destination, Dates/Days, Interests, Pace, Companions, Constraints\n- Inside each block, add 2–4 simple bullet-like lines as subnodes via --> connections\n- Keep labels short (<= 4 words), no punctuation that breaks Mermaid\n",
+              "role": "system"
+            },
+            {
+              "content": "=Trip data (JSON):\n\n{{ JSON.stringify($json.trip || {}, null, 2) }}\n"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.8,
+      "position": [
+        2928,
+        272
+      ],
+      "id": "bc90a4af-ade3-4c92-95ae-edddc88917a7",
+      "name": "make mermaid",
+      "credentials": {
+        "openAiApi": {
+          "id": "gRRG5FYoE9FqTXld",
+          "name": "OpenAi account 3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Read Mermaid code from the LLM result (it might be fenced with ```mermaid)\nconst raw = $json.message?.content ?? $json.code ?? '';\nconst code = String(raw)\n  .replace(/```mermaid/gi, '```')\n  .replace(/```/g, '')\n  .trim();\n\n// Build mermaid.ink URLs\nconst b64 = Buffer.from(code, 'utf8').toString('base64url');\nconst png = `https://mermaid.ink/img/${b64}`;\nconst svg = `https://mermaid.ink/svg/${b64}`;\n\nreturn [{\n  json: {\n    mermaid_code: code,\n    mermaid_url_png: png,\n    mermaid_url_svg: svg\n  }\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3216,
+        272
+      ],
+      "id": "aa880560-3612-43b7-9251-d30b5c8d1c71",
+      "name": "Extract Mermaid & build URL"
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = ($json.message?.content ?? $json.content ?? '').toString();\nconst m = raw.match(/\\{[\\s\\S]*\\}/); // first JSON object in the LLM reply\nif (!m) return [{ json: { ...$json, error: 'No JSON itinerary found', raw } }];\n\nlet plan;\ntry { plan = JSON.parse(m[0]); }\ncatch (e) { return [{ json: { ...$json, error: 'Bad JSON', e: String(e), raw } }]; }\n\nreturn [{ json: { ...$json, ...plan } }]; // expect { days:[...], notes? }\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2496,
+        240
+      ],
+      "id": "df70e203-9998-40dc-8fd8-dac809fa81c1",
+      "name": "Parse itinerary JSON"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        3680,
+        144
+      ],
+      "id": "079cb445-e04f-48e5-9fd8-714ee1838634",
+      "name": "Merge1"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        3920,
+        256
+      ],
+      "id": "ce2f3a9b-04e7-473f-a199-06f8e2ee436f",
+      "name": "Merge2"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Normalize Input": {
+      "main": [
+        [
+          {
+            "node": "Load & merge memory",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "entry": {
+      "main": [
+        [
+          {
+            "node": "Normalize Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Extracted JSON": {
+      "main": [
+        [
+          {
+            "node": "Check Completeness",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Completeness": {
+      "main": [
+        [
+          {
+            "node": "Need more info?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Need more info?": {
+      "main": [
+        [
+          {
+            "node": "Ask for info",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 1
+          }
+        ],
+        [
+          {
+            "node": "HTTP Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Trip JSON   ": {
+      "main": [
+        [
+          {
+            "node": "Parse Extracted JSON",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ask for info": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Render Askback HTML": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook ",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Respond to Webhook ": {
+      "main": [
+        []
+      ]
+    },
+    "Merge": {
+      "main": [
+        [
+          {
+            "node": "Render Askback HTML",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request": {
+      "main": [
+        [
+          {
+            "node": "Attach geocode",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Attach geocode": {
+      "main": [
+        [
+          {
+            "node": "Plan Itinerary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Plan Itinerary": {
+      "main": [
+        [
+          {
+            "node": "Parse itinerary JSON",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Render Plan HTML": {
+      "main": [
+        [
+          {
+            "node": "make mermaid",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Merge1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Graph explainer": {
+      "main": [
+        [
+          {
+            "node": "Merge2",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Combine pages into tabs": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook ",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load & merge memory": {
+      "main": [
+        [
+          {
+            "node": "Extract Trip JSON   ",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "make mermaid": {
+      "main": [
+        [
+          {
+            "node": "Extract Mermaid & build URL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Mermaid & build URL": {
+      "main": [
+        [
+          {
+            "node": "Graph explainer",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Merge1",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Parse itinerary JSON": {
+      "main": [
+        [
+          {
+            "node": "Render Plan HTML",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge1": {
+      "main": [
+        [
+          {
+            "node": "Merge2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge2": {
+      "main": [
+        [
+          {
+            "node": "Combine pages into tabs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "d50cbd88-06ad-4ee1-a272-882b10e95850",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "450010a94e38b87e860d3ebb397a271f23154d58d3701b4219b6e36b6dbee96c"
+  },
+  "id": "Wa1qd4Xm3pNqBtXn",
+  "tags": []
+}
